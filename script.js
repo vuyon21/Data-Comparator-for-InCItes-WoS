@@ -24,7 +24,7 @@ document.addEventListener('DOMContentLoaded', function () {
             // Load template
             const templateFile = templateInput.files[0];
             const templateText = await readFileAsText(templateFile);
-            templateData = parseCSV(templateText);
+            templateData = parseDelimitedFile(templateText);
 
             if (templateData.length === 0) throw new Error("Template is empty.");
 
@@ -32,7 +32,7 @@ document.addEventListener('DOMContentLoaded', function () {
             allDataRows = [];
             for (const file of dataInput.files) {
                 const dataText = await readFileAsText(file);
-                const rows = parseCSV(dataText);
+                const rows = parseDelimitedFile(dataText);
                 allDataRows.push(...rows.filter(row => row.EmailAddress?.trim()));
             }
 
@@ -122,13 +122,18 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    function parseCSV(text) {
+    function parseDelimitedFile(text) {
+        // Detect delimiter: comma or tab
+        const firstLine = text.split('\n')[0];
+        const delimiter = firstLine.includes(',') ? ',' : '\t';
+
         const lines = text.trim().split('\n');
         if (!lines.length) return [];
-        const headers = lines[0].split(',').map(h => h.trim());
+
+        const headers = lines[0].split(delimiter).map(h => h.trim());
         const rows = [];
         for (let i = 1; i < lines.length; i++) {
-            const values = parseCSVRow(lines[i]);
+            const values = parseDelimitedRow(lines[i], delimiter);
             const row = {};
             headers.forEach((header, idx) => {
                 row[header] = (values[idx] || '').trim();
@@ -138,7 +143,7 @@ document.addEventListener('DOMContentLoaded', function () {
         return rows;
     }
 
-    function parseCSVRow(row) {
+    function parseDelimitedRow(row, delimiter) {
         const result = [];
         let current = '';
         let inQuotes = false;
@@ -146,7 +151,7 @@ document.addEventListener('DOMContentLoaded', function () {
             const char = row[i];
             if (char === '"' && (i === 0 || row[i - 1] !== '\\')) {
                 inQuotes = !inQuotes;
-            } else if (char === ',' && !inQuotes) {
+            } else if ((char === ',' || char === '\t') && !inQuotes) {
                 result.push(current);
                 current = '';
             } else {
@@ -180,7 +185,7 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
-        const headers = [...new Set(rows.flatMap(Object.keys))]; // Get all unique headers
+        const headers = [...new Set(rows.flatMap(Object.keys))];
         let table = `<table><thead><tr>`;
         headers.forEach(h => table += `<th>${escapeHtml(h)}</th>`);
         table += `</tr></thead><tbody>`;
@@ -223,7 +228,7 @@ document.addEventListener('DOMContentLoaded', function () {
     function downloadExcel(rows) {
         if (rows.length === 0) return;
 
-        // Fallback to CSV if SheetJS not loaded (shouldn't happen — we load it in index.html)
+        // Fallback to CSV if SheetJS not loaded
         if (typeof XLSX === 'undefined') {
             alert("⚠️ Excel export requires SheetJS. Downloading as CSV instead.");
             downloadCSV(rows);
