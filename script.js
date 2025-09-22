@@ -26,47 +26,213 @@ document.addEventListener('DOMContentLoaded', function () {
             const templateText = await readFileAsText(templateFile);
             templateData = parseCSV(templateText);
 
-            if (templateData.length === 0) {
-                throw new Error("Template file is empty or invalid.");
-            }
+            if (templateData.length === 0) throw new Error("Template is empty.");
 
             // Load all data files
             allDataRows = [];
             for (const file of dataInput.files) {
                 const dataText = await readFileAsText(file);
                 const rows = parseCSV(dataText);
-                if (rows.length > 0) {
-                    allDataRows.push(...rows);
-                }
+                allDataRows.push(...rows.filter(row => row.EmailAddress?.trim()));
             }
 
-            if (allDataRows.length === 0) {
-                throw new Error("No valid data found in uploaded files.");
-            }
+            if (allDataRows.length === 0) throw new Error("No valid data rows with email found.");
 
-            // Normalize columns
-            templateData = templateData.map(row => normalizeRow(row));
-            allDataRows = allDataRows.map(row => normalizeRow(row));
+            // Normalize columns in both datasets
+            templateData = templateData.map(normalizeRow);
+            allDataRows = allDataRows.map(normalizeRow);
 
-            // Build mapping by EmailAddress (since AuthorID is empty in template)
-            const emailMapping = {};
+            // Build email-based mapping from template
+            const emailToTemplateIndices = {};
             templateData.forEach((row, idx) => {
-                const email = (row.EmailAddress || '').toString().trim().toLowerCase();
-                if (email && email !== '') {
-                    if (!emailMapping[email]) emailMapping[email] = [];
-                    emailMapping[email].push(idx);
+                const email = (row.EmailAddress || '').trim().toLowerCase();
+                if (email) {
+                    if (!emailToTemplateIndices[email]) emailToTemplateIndices[email] = [];
+                    emailToTemplateIndices[email].push(idx);
                 }
             });
 
-            // Output rows
+            // Result container
             const outputRows = [];
 
             // Process each data row
             allDataRows.forEach(dataRow => {
-                const authorId = (dataRow.AuthorID || '').toString().trim();
-                const email = (dataRow.EmailAddress || '').toString().trim().toLowerCase();
-                const doi = (dataRow.DocumentID || dataRow.DOI || '').toString().trim();
-                const ut = (dataRow['UT (Unique WOS ID)'] || '').toString().trim();
+                const email = (dataRow.EmailAddress || '').trim().toLowerCase();
+                const doi = (dataRow.DocumentID || dataRow.DOI || '').trim();
+                const ut = (dataRow['UT (Unique WOS ID)'] || '').trim();
 
-                // Match by email (ignore AuthorID since template doesn't have it)
-                if (emailMapping[email] && email
+                // Skip if no DOI or UT and no email
+                if (!doi && !ut && !email) return;
+
+                if (emailToTemplateIndices[email] && emailToTemplateIndices[email].length > 0) {
+                    // Match found → duplicate template row for each match
+                    emailToTemplateIndices[email].forEach(idx => {
+                        const newRow = { ...templateData[idx] };
+                        if (doi) newRow.DocumentID = doi;
+                        if (ut) newRow['UT (Unique WOS ID)'] = ut;
+                        outputRows.push(newRow);
+                    });
+                } else {
+                    // No match → create NEW row
+                    outputRows.push({
+                        PersonID: dataRow.PersonID || '',
+                        FirstName: dataRow.FirstName || '',
+                        LastName: dataRow.LastName || '',
+                        OrganizationID: dataRow.OrganizationID || '',
+                        DocumentID: doi,
+                        AuthorID: dataRow.AuthorID || '',
+                        EmailAddress: dataRow.EmailAddress || '',
+                        OtherNames: dataRow.OtherNames || '',
+                        'UT (Unique WOS ID)': ut
+                    });
+                }
+            });
+
+            if (outputRows.length === 0) throw new Error("No matches or data to output.");
+
+            // Sort by Email and DocumentID for readability
+            outputRows.sort((a, b) => {
+                const emailA = (a.EmailAddress || '').toLowerCase();
+                const emailB = (b.EmailAddress || '').toLowerCase();
+                if (emailA !== emailB) return emailA.localeCompare(emailB);
+                return (a.DocumentID || '').localeCompare(b.DocumentID || '');
+            });
+
+            // Display and enable downloads
+            displayResults(outputRows);
+            resultSection.style.display = 'block';
+
+            downloadCsvBtn.onclick = () => downloadCSV(outputRows);
+            downloadExcelBtn.onclick = () => downloadExcel(outputRows);
+
+        } catch (error) {
+            alert("⚠️ Error: " + error.message);
+            console.error(error);
+        }
+    });
+
+    // --- Helper Functions ---
+
+    function readFileAsText(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = e => resolve(e.target.result);
+            reader.onerror = reject;
+            reader.readAsText(file);
+        });
+    }
+
+    function parseCSV(text) {
+        const lines = text.trim().split('\n');
+        if (!lines.length) return [];
+        const headers = lines[0].split(',').map(h => h.trim());
+        const rows = [];
+        for (let i = 1; i < lines.length; i++) {
+            const values = parseCSVRow(lines[i]);
+            const row = {};
+            headers.forEach((header, idx) => {
+                row[header] = (values[idx] || '').trim();
+            });
+            rows.push(row);
+        }
+        return rows;
+    }
+
+    function parseCSVRow(row) {
+        const result = [];
+        let current = '';
+        let inQuotes = false;
+        for (let i = 0; i < row.length; i++) {
+            const char = row[i];
+            if (char === '"' && (i === 0 || row[i - 1] !== '\\')) {
+                inQuotes = !inQuotes;
+            } else if (char === ',' && !inQuotes) {
+                result.push(current);
+                current = '';
+            } else {
+                current += char;
+            }
+        }
+        result.push(current);
+        return result;
+    }
+
+    function normalizeRow(row) {
+        const normalized = {};
+        for (let key in row) {
+            let cleanKey = key.trim();
+            if (/documentid/i.test(cleanKey)) cleanKey = 'DocumentID';
+            if (/authorid/i.test(cleanKey)) cleanKey = 'AuthorID';
+            if (/email/i.test(cleanKey)) cleanKey = 'EmailAddress';
+            if (/personid/i.test(cleanKey)) cleanKey = 'PersonID';
+            if (/firstname/i.test(cleanKey)) cleanKey = 'FirstName';
+            if (/lastname/i.test(cleanKey)) cleanKey = 'LastName';
+            if (/organization/i.test(cleanKey)) cleanKey = 'OrganizationID';
+            if (/ut.*wos/i.test(cleanKey)) cleanKey = 'UT (Unique WOS ID)';
+            normalized[cleanKey] = row[key];
+        }
+        return normalized;
+    }
+
+    function displayResults(rows) {
+        if (rows.length === 0) {
+            previewDiv.innerHTML = "<p>No results to display.</p>";
+            return;
+        }
+
+        const headers = [...new Set(rows.flatMap(Object.keys))]; // Get all unique headers
+        let table = `<table><thead><tr>`;
+        headers.forEach(h => table += `<th>${escapeHtml(h)}</th>`);
+        table += `</tr></thead><tbody>`;
+
+        rows.forEach(row => {
+            table += `<tr>`;
+            headers.forEach(h => table += `<td>${escapeHtml(row[h] || '')}</td>`);
+            table += `</tr>`;
+        });
+        table += `</tbody></table>`;
+
+        previewDiv.innerHTML = table;
+        statsDiv.innerHTML = `<p>✅ Processed <strong>${rows.length}</strong> rows from <strong>${dataInput.files.length}</strong> data files.</p>`;
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    function downloadCSV(rows) {
+        if (rows.length === 0) return;
+        const headers = [...new Set(rows.flatMap(Object.keys))];
+        let csv = headers.join(',') + '\n';
+        rows.forEach(row => {
+            csv += headers.map(h => `"${(row[h] || '').replace(/"/g, '""')}"`).join(',') + '\n';
+        });
+
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.setAttribute('download', 'matched_authors.csv');
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+
+    function downloadExcel(rows) {
+        if (rows.length === 0) return;
+
+        // Fallback to CSV if SheetJS not loaded (shouldn't happen — we load it in index.html)
+        if (typeof XLSX === 'undefined') {
+            alert("⚠️ Excel export requires SheetJS. Downloading as CSV instead.");
+            downloadCSV(rows);
+            return;
+        }
+
+        const ws = XLSX.utils.json_to_sheet(rows);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Results");
+        XLSX.writeFile(wb, "matched_authors.xlsx");
+    }
+});
