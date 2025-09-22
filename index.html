@@ -1,1 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>📚 Author Data Matcher</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>📚 Author Data Matcher</h1>
+        <p>Upload your template (CSV) and data files (CSV) to match DOIs and WOS IDs.</p>
 
+        <div class="upload-section">
+            <label>📁 Upload Template (CSV):</label>
+            <input type="file" id="templateFile" accept=".csv">
+
+            <label>📁 Upload Data Files (CSV):</label>
+            <input type="file" id="dataFiles" accept=".csv" multiple>
+
+            <button id="processBtn" disabled>▶️ Process Files</button>
+        </div>
+
+        <div id="resultSection" style="display:none;">
+            <h2>✅ Results</h2>
+            <div id="stats"></div>
+            <button id="downloadCsv">📥 Download as CSV</button>
+            <button id="downloadExcel">📥 Download as Excel</button>
+            <div id="preview"></div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
