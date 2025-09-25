@@ -33,11 +33,14 @@ document.addEventListener('DOMContentLoaded', function () {
             for (const file of dataInput.files) {
                 const dataText = await readFileAsText(file);
                 const rows = parseDelimitedFile(dataText);
-                // Keep rows that have at least email or authorID (after normalization)
-                allDataRows.push(...rows.filter(row => 
-                    (row.EmailAddress && row.EmailAddress.trim()) || 
-                    (row.AuthorID && row.AuthorID.trim())
-                ));
+                
+                // Keep rows that have at least EmailAddress OR AuthorID (after normalization)
+                const validRows = rows.filter(row => {
+                    const email = (row['Email Addresses'] || row.EmailAddress || '').toString().trim();
+                    const orcid = (row.ORCIDs || row.AuthorID || '').toString().trim();
+                    return email !== '' || orcid !== '';
+                });
+                allDataRows.push(...validRows);
             }
 
             if (allDataRows.length === 0) throw new Error("No valid data rows with email or ORCID found.");
@@ -91,7 +94,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (matchedIndices.size > 0) {
                     // ✅ Match found: duplicate template row(s), update only DOI/UT
                     matchedIndices.forEach(idx => {
-                        const newRow = { ...templateData[idx] }; // ← Only template columns
+                        const newRow = { ...templateData[idx] };
                         if (doi) newRow.DocumentID = doi;
                         if (ut) newRow['UT (Unique WOS ID)'] = ut;
                         outputRows.push(newRow);
@@ -190,16 +193,17 @@ document.addEventListener('DOMContentLoaded', function () {
         const normalized = {};
         for (let key in row) {
             let cleanKey = key.trim();
-            // Standardize key column names
-            if (/documentid/i.test(cleanKey)) cleanKey = 'DocumentID';
-            if (/authorid/i.test(cleanKey)) cleanKey = 'AuthorID';
-            if (/email/i.test(cleanKey)) cleanKey = 'EmailAddress';
-            if (/personid/i.test(cleanKey)) cleanKey = 'PersonID';
-            if (/firstname/i.test(cleanKey)) cleanKey = 'FirstName';
-            if (/lastname/i.test(cleanKey)) cleanKey = 'LastName';
-            if (/organization/i.test(cleanKey)) cleanKey = 'OrganizationID';
-            if (/ut.*wos/i.test(cleanKey)) cleanKey = 'UT (Unique WOS ID)';
-            if (/orcid/i.test(cleanKey)) cleanKey = 'AuthorID'; // 👈 Critical: ORCIDs → AuthorID
+
+            // ✅ EXACT MATCH for your data file columns
+            if (cleanKey === "Email Addresses") {
+                cleanKey = "EmailAddress";
+            } else if (cleanKey === "ORCIDs") {
+                cleanKey = "AuthorID";
+            } else if (cleanKey === "DOI") {
+                cleanKey = "DocumentID";
+            }
+            // Keep "UT (Unique WOS ID)" as-is
+
             normalized[cleanKey] = row[key];
         }
         return normalized;
