@@ -33,22 +33,35 @@ document.addEventListener('DOMContentLoaded', function () {
             for (const file of dataInput.files) {
                 const dataText = await readFileAsText(file);
                 const rows = parseDelimitedFile(dataText);
-                allDataRows.push(...rows.filter(row => row.EmailAddress?.trim()));
+                // Keep rows that have at least email or authorID (after normalization)
+                allDataRows.push(...rows.filter(row => 
+                    (row.EmailAddress && row.EmailAddress.trim()) || 
+                    (row.AuthorID && row.AuthorID.trim())
+                ));
             }
 
-            if (allDataRows.length === 0) throw new Error("No valid data rows with email found.");
+            if (allDataRows.length === 0) throw new Error("No valid data rows with email or ORCID found.");
 
             // Normalize columns in both datasets
             templateData = templateData.map(normalizeRow);
             allDataRows = allDataRows.map(normalizeRow);
 
-            // Build email-based mapping from template
+            // Build mappings from template: by Email and by AuthorID
             const emailToTemplateIndices = {};
+            const authorIdToTemplateIndices = {};
+
             templateData.forEach((row, idx) => {
                 const email = (row.EmailAddress || '').trim().toLowerCase();
+                const authorId = (row.AuthorID || '').trim().toLowerCase();
+
                 if (email) {
                     if (!emailToTemplateIndices[email]) emailToTemplateIndices[email] = [];
                     emailToTemplateIndices[email].push(idx);
+                }
+
+                if (authorId) {
+                    if (!authorIdToTemplateIndices[authorId]) authorIdToTemplateIndices[authorId] = [];
+                    authorIdToTemplateIndices[authorId].push(idx);
                 }
             });
 
@@ -58,22 +71,33 @@ document.addEventListener('DOMContentLoaded', function () {
             // Process each data row
             allDataRows.forEach(dataRow => {
                 const email = (dataRow.EmailAddress || '').trim().toLowerCase();
+                const authorId = (dataRow.AuthorID || '').trim().toLowerCase();
                 const doi = (dataRow.DocumentID || dataRow.DOI || '').trim();
                 const ut = (dataRow['UT (Unique WOS ID)'] || '').trim();
 
-                // Skip if no DOI or UT and no email
-                if (!doi && !ut && !email) return;
+                // Skip if no DOI or UT and no identifying info
+                if (!doi && !ut && !email && !authorId) return;
 
-                if (emailToTemplateIndices[email] && emailToTemplateIndices[email].length > 0) {
-                    // Match found → duplicate template row for each match
-                    emailToTemplateIndices[email].forEach(idx => {
-                        const newRow = { ...templateData[idx] };
+                // Find all matching template rows (by email OR authorID)
+                const matchedIndices = new Set();
+
+                if (emailToTemplateIndices[email]) {
+                    emailToTemplateIndices[email].forEach(idx => matchedIndices.add(idx));
+                }
+                if (authorIdToTemplateIndices[authorId]) {
+                    authorIdToTemplateIndices[authorId].forEach(idx => matchedIndices.add(idx));
+                }
+
+                if (matchedIndices.size > 0) {
+                    // ✅ Match found: duplicate template row(s), update only DOI/UT
+                    matchedIndices.forEach(idx => {
+                        const newRow = { ...templateData[idx] }; // ← Only template columns
                         if (doi) newRow.DocumentID = doi;
                         if (ut) newRow['UT (Unique WOS ID)'] = ut;
                         outputRows.push(newRow);
                     });
                 } else {
-                    // No match → create NEW row
+                    // ✅ No match: create minimal row with ONLY core fields
                     outputRows.push({
                         PersonID: dataRow.PersonID || '',
                         FirstName: dataRow.FirstName || '',
@@ -90,7 +114,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
             if (outputRows.length === 0) throw new Error("No matches or data to output.");
 
-            // Sort by Email and DocumentID for readability
+            // Sort for readability
             outputRows.sort((a, b) => {
                 const emailA = (a.EmailAddress || '').toLowerCase();
                 const emailB = (b.EmailAddress || '').toLowerCase();
@@ -98,10 +122,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 return (a.DocumentID || '').localeCompare(b.DocumentID || '');
             });
 
-            // Display and enable downloads
+            // Display results
             displayResults(outputRows);
             resultSection.style.display = 'block';
 
+            // Attach download handlers
             downloadCsvBtn.onclick = () => downloadCSV(outputRows);
             downloadExcelBtn.onclick = () => downloadExcel(outputRows);
 
@@ -123,7 +148,6 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function parseDelimitedFile(text) {
-        // Detect delimiter: comma or tab
         const firstLine = text.split('\n')[0];
         const delimiter = firstLine.includes(',') ? ',' : '\t';
 
@@ -166,6 +190,7 @@ document.addEventListener('DOMContentLoaded', function () {
         const normalized = {};
         for (let key in row) {
             let cleanKey = key.trim();
+            // Standardize key column names
             if (/documentid/i.test(cleanKey)) cleanKey = 'DocumentID';
             if (/authorid/i.test(cleanKey)) cleanKey = 'AuthorID';
             if (/email/i.test(cleanKey)) cleanKey = 'EmailAddress';
@@ -174,6 +199,7 @@ document.addEventListener('DOMContentLoaded', function () {
             if (/lastname/i.test(cleanKey)) cleanKey = 'LastName';
             if (/organization/i.test(cleanKey)) cleanKey = 'OrganizationID';
             if (/ut.*wos/i.test(cleanKey)) cleanKey = 'UT (Unique WOS ID)';
+            if (/orcid/i.test(cleanKey)) cleanKey = 'AuthorID'; // 👈 Critical: ORCIDs → AuthorID
             normalized[cleanKey] = row[key];
         }
         return normalized;
@@ -228,7 +254,6 @@ document.addEventListener('DOMContentLoaded', function () {
     function downloadExcel(rows) {
         if (rows.length === 0) return;
 
-        // Fallback to CSV if SheetJS not loaded
         if (typeof XLSX === 'undefined') {
             alert("⚠️ Excel export requires SheetJS. Downloading as CSV instead.");
             downloadCSV(rows);
