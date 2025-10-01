@@ -27,7 +27,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // Required columns for Template and Data
     const REQUIRED_TEMPLATE_HEADERS = ["PersonID", "AuthorID", "EmailAddress"];
-    const REQUIRED_DATA_HEADERS = ["Staff/student number", "ORCID", "Email", "Name"];
+    const REQUIRED_DATA_HEADERS = ["Staff/student number", "ORCID", "Email", "Name", "Department/School/Unit"];
 
     [templateInput, dataInput].forEach(input => {
         input.addEventListener('change', () => {
@@ -66,6 +66,7 @@ document.addEventListener('DOMContentLoaded', function () {
             // Start with original template rows
             const outputRows = [...templateData];
             let newCount = 0;
+            let matchedCount = 0;
 
             // --- Compare and Append ---
             for (const row of allDataRows) {
@@ -73,19 +74,20 @@ document.addEventListener('DOMContentLoaded', function () {
                 const authorId = (row['ORCID'] || '').trim().toLowerCase();
                 const email = (row['Email'] || '').trim().toLowerCase();
 
-                // Skip if match found on ANY field
+                // If already exists → count as matched and skip
                 if (personIdSet.has(personId) || authorIdSet.has(authorId) || emailSet.has(email)) {
+                    matchedCount++;
                     continue;
                 }
 
-                // Otherwise, append new row to template
+                // Otherwise, append new row
                 const newRow = {
                     PersonID: row['Staff/student number'] || '',
                     FirstName: row['Name'] ? row['Name'].split(' ')[0] : '',
                     LastName: row['Name'] ? row['Name'].split(' ').slice(1).join(' ') : '',
-                    OrganizationID: '', // left empty
-                    DocumentID: '', // left empty
-                    "UT (Unique WOS ID)": '', // left empty
+                    OrganizationID: row['Department/School/Unit'] || '',
+                    DocumentID: '',
+                    "UT (Unique WOS ID)": '',
                     AuthorID: row['ORCID'] || '',
                     EmailAddress: row['Email'] || '',
                     OtherNames: '',
@@ -101,7 +103,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (email) emailSet.add(email);
             }
 
-            displayResults(outputRows, newCount);
+            displayResults(outputRows, newCount, matchedCount, allDataRows.length);
             resultSection.style.display = 'block';
 
             downloadCsvBtn.onclick = () => downloadCSV(outputRows);
@@ -172,7 +174,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    function displayResults(rows, newCount) {
+    function displayResults(rows, newCount, matchedCount, totalDataRows) {
         if (rows.length === 0) {
             previewDiv.innerHTML = "<p>No results to display.</p>";
             return;
@@ -190,7 +192,14 @@ document.addEventListener('DOMContentLoaded', function () {
         table += `</tbody></table>`;
 
         previewDiv.innerHTML = table;
-        statsDiv.innerHTML = `<p>✅ Added <strong>${newCount}</strong> new rows. Final total: <strong>${rows.length}</strong>.</p>`;
+
+        const matchPercent = totalDataRows > 0 ? ((matchedCount / totalDataRows) * 100).toFixed(1) : 0;
+        const newPercent = totalDataRows > 0 ? ((newCount / totalDataRows) * 100).toFixed(1) : 0;
+
+        statsDiv.innerHTML = `
+            <p>✅ Added <strong>${newCount}</strong> new rows (${newPercent}% of data rows).</p>
+            <p>🔍 Matched <strong>${matchedCount}</strong> existing rows (${matchPercent}% of data rows).</p>
+            <p>📊 Final total in template: <strong>${rows.length}</strong>.</p>`;
     }
 
     function escapeHtml(text) {
