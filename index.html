@@ -11,19 +11,16 @@
     <div class="container">
         <h1>📚 Author Data Matcher</h1>
         <p>
-            Upload your <strong>Template CSV</strong> (the file to populate) and <strong>Data CSV</strong> 
-            (source of DOIs/UTs). The script will match authors by <em>EmailAddress</em> or <em>AuthorID</em>, 
-            pull DOIs/UTs, clean duplicates, and show you which authors still have no DOIs/UTs.
+            Upload a single <strong>CSV file</strong> containing your author records.  
+            The script will group rows by <em>EmailAddress</em> or <em>AuthorID</em>,  
+            deduplicate DOIs/UTs, remove redundant empty rows, and generate a clean template.  
         </p>
 
         <div class="upload-section">
-            <label>📁 Upload Template (CSV):</label>
+            <label>📁 Upload File (CSV):</label>
             <input type="file" id="templateFile" accept=".csv">
 
-            <label>📁 Upload Data Files (CSV):</label>
-            <input type="file" id="dataFiles" accept=".csv" multiple>
-
-            <button id="processBtn" disabled>▶️ Process Files</button>
+            <button id="processBtn" disabled>▶️ Process File</button>
         </div>
 
         <div id="resultSection" style="display:none;">
@@ -34,7 +31,7 @@
             <div id="downloadButtons" class="download-buttons">
                 <button id="downloadCsv">📥 Download as CSV</button>
                 <button id="downloadExcel">📥 Download as Excel</button>
-                <!-- Gaps buttons will be injected here dynamically by script.js -->
+                <!-- Gaps buttons will be injected dynamically -->
             </div>
 
             <div id="preview"></div>
