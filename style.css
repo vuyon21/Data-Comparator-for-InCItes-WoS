@@ -3,6 +3,7 @@ body {
     background: #f5f5f5;
     padding: 20px;
 }
+
 .container {
     max-width: 900px;
     margin: 0 auto;
@@ -11,12 +12,14 @@ body {
     border-radius: 10px;
     box-shadow: 0 0 10px rgba(0,0,0,0.1);
 }
+
 .upload-section {
     margin: 30px 0;
     padding: 20px;
     border: 2px dashed #ccc;
     border-radius: 8px;
 }
+
 button {
     background: #007bff;
     color: white;
@@ -27,13 +30,16 @@ button {
     cursor: pointer;
     font-size: 16px;
 }
+
 button:disabled {
     background: #ccc;
     cursor: not-allowed;
 }
+
 button:hover:not(:disabled) {
     background: #0056b3;
 }
+
 #preview {
     margin-top: 20px;
     max-height: 400px;
@@ -42,15 +48,71 @@ button:hover:not(:disabled) {
     padding: 10px;
     background: #fafafa;
 }
+
+/* Table styles */
 table {
     width: 100%;
     border-collapse: collapse;
+    margin-bottom: 20px;
 }
+
 th, td {
     border: 1px solid #ddd;
     padding: 8px;
     text-align: left;
 }
+
 th {
     background: #f0f0f0;
+}
+
+/* Color-coded rows */
+.matched-table tbody tr td {
+    background-color: #e6f0ff; /* light blue */
+}
+
+.ufs-table tbody tr td {
+    background-color: #e6ffe6; /* light green */
+}
+
+.final-table tbody tr td {
+    background-color: #f9f9f9; /* light gray */
+}
+
+/* Legend styles */
+.legend {
+    margin: 15px 0;
+    padding: 10px;
+    border: 1px solid #ddd;
+    background: #fdfdfd;
+    border-radius: 5px;
+    font-size: 14px;
+}
+
+.legend span {
+    display: inline-block;
+    margin-right: 20px;
+}
+
+.legend-box {
+    display: inline-block;
+    width: 15px;
+    height: 15px;
+    margin-right: 5px;
+    vertical-align: middle;
+}
+
+.legend-blue {
+    background-color: #e6f0ff;
+    border: 1px solid #99c2ff;
+}
+
+.legend-green {
+    background-color: #e6ffe6;
+    border: 1px solid #99cc99;
+}
+
+.legend-gray {
+    background-color: #f9f9f9;
+    border: 1px solid #ccc;
 }
