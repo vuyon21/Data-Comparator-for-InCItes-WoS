@@ -145,6 +145,35 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
             }
 
+            // --- Clean out empty rows if author already has DOI/UT ---
+            const grouped = {};
+            outputRows.forEach(row => {
+                const identity = (row.EmailAddress || row.AuthorID || '').toLowerCase();
+                if (!grouped[identity]) grouped[identity] = [];
+                grouped[identity].push(row);
+            });
+
+            let cleanedRows = [];
+            Object.values(grouped).forEach(group => {
+                const hasDOIorUT = group.some(r => (r.DocumentID && r.DocumentID !== '') || (r["UT (Unique WOS ID)"] && r["UT (Unique WOS ID)"] !== ''));
+                if (hasDOIorUT) {
+                    cleanedRows.push(...group.filter(r => (r.DocumentID && r.DocumentID !== '') || (r["UT (Unique WOS ID)"] && r["UT (Unique WOS ID)"] !== '')));
+                } else {
+                    cleanedRows.push(...group);
+                }
+            });
+
+            // Replace outputRows with cleaned version
+            outputRows.length = 0;
+            outputRows.push(...cleanedRows);
+
+            // Group rows together by author
+            outputRows.sort((a, b) => {
+                const idA = (a.EmailAddress || a.AuthorID || '').toLowerCase();
+                const idB = (b.EmailAddress || b.AuthorID || '').toLowerCase();
+                return idA.localeCompare(idB);
+            });
+
             displayResults(outputRows, matchedRows, addedUfsRows);
             resultSection.style.display = 'block';
 
