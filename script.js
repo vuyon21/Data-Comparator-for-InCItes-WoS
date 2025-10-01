@@ -27,7 +27,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // Required columns
     const REQUIRED_TEMPLATE_HEADERS = ["PersonID", "AuthorID", "EmailAddress"];
-    const REQUIRED_DATA_HEADERS = ["Name", "Email Addresses", "ORCIDs", "DOI", "UT (Unique WOS ID)", "Department/School/Unit", "Staff/student number"];
+    const REQUIRED_DATA_HEADERS = ["Email Addresses", "ORCIDs", "DOI", "UT (Unique WOS ID)"];
 
     [templateInput, dataInput].forEach(input => {
         input.addEventListener('change', () => {
@@ -75,8 +75,8 @@ document.addEventListener('DOMContentLoaded', function () {
             if (allDataRows.length === 0) throw new Error("No data rows found in data files.");
 
             const outputRows = [...templateData];
-            let matchedLinks = 0;
-            let addedUfsRows = 0;
+            const matchedRows = [];
+            const addedUfsRows = [];
 
             // --- Compare and Enrich ---
             for (const row of allDataRows) {
@@ -115,17 +115,17 @@ document.addEventListener('DOMContentLoaded', function () {
                         newRow.DocumentID = doi || baseRow.DocumentID || '';
                         newRow["UT (Unique WOS ID)"] = ut || baseRow["UT (Unique WOS ID)"] || '';
                         outputRows.push(newRow);
-                        matchedLinks++;
+                        matchedRows.push(newRow);
                     });
                 } else {
                     // --- UFS-only rows: add new entry if ufs.ac.za email exists
                     const ufsEmail = emailCandidates.find(e => e.endsWith("@ufs.ac.za"));
                     if (ufsEmail) {
                         const newRow = {
-                            PersonID: row['Staff/student number'] || '',
-                            FirstName: row['Name'] ? row['Name'].split(' ')[0] : '',
-                            LastName: row['Name'] ? row['Name'].split(' ').slice(1).join(' ') : '',
-                            OrganizationID: row['Department/School/Unit'] || '',
+                            PersonID: '',
+                            FirstName: '',
+                            LastName: '',
+                            OrganizationID: '',
                             DocumentID: doi,
                             "UT (Unique WOS ID)": ut,
                             AuthorID: orcidCandidates.length > 0 ? orcidCandidates[0] : '',
@@ -134,12 +134,12 @@ document.addEventListener('DOMContentLoaded', function () {
                             FormerInstitution: ''
                         };
                         outputRows.push(newRow);
-                        addedUfsRows++;
+                        addedUfsRows.push(newRow);
                     }
                 }
             }
 
-            displayResults(outputRows, matchedLinks, addedUfsRows);
+            displayResults(outputRows, matchedRows, addedUfsRows);
             resultSection.style.display = 'block';
 
             downloadCsvBtn.onclick = () => downloadCSV(outputRows);
@@ -210,28 +210,47 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    function displayResults(rows, matchedLinks, addedUfsRows) {
-        if (rows.length === 0) {
+    function displayResults(allRows, matchedRows, addedUfsRows) {
+        if (allRows.length === 0) {
             previewDiv.innerHTML = "<p>No results to display.</p>";
             return;
         }
+
         const headers = TEMPLATE_HEADERS;
+        let html = "";
+
+        // Matched table
+        html += `<h3>🔗 Matched & Enriched Rows (${matchedRows.length})</h3>`;
+        html += buildTable(matchedRows, headers);
+
+        // Added UFS rows table
+        html += `<h3>🟢 New UFS-only Rows (${addedUfsRows.length})</h3>`;
+        html += buildTable(addedUfsRows, headers);
+
+        // Final combined table
+        html += `<h3>📊 Final Combined Template (${allRows.length})</h3>`;
+        html += buildTable(allRows, headers);
+
+        previewDiv.innerHTML = html;
+
+        statsDiv.innerHTML = `
+            <p>🔗 Enriched <strong>${matchedRows.length}</strong> rows with DOI/UT links from data file.</p>
+            <p>🟢 Added <strong>${addedUfsRows.length}</strong> new UFS-only rows (@ufs.ac.za emails).</p>
+            <p>📊 Final total rows in template: <strong>${allRows.length}</strong>.</p>`;
+    }
+
+    function buildTable(rows, headers) {
+        if (rows.length === 0) return "<p>No rows.</p>";
         let table = `<table><thead><tr>`;
         headers.forEach(h => table += `<th>${escapeHtml(h)}</th>`);
         table += `</tr></thead><tbody>`;
-
         rows.forEach(row => {
             table += `<tr>`;
             headers.forEach(h => table += `<td>${escapeHtml(row[h] || '')}</td>`);
             table += `</tr>`;
         });
         table += `</tbody></table>`;
-
-        previewDiv.innerHTML = table;
-        statsDiv.innerHTML = `
-            <p>🔗 Enriched <strong>${matchedLinks}</strong> rows with DOI/UT links from data file.</p>
-            <p>🟢 Added <strong>${addedUfsRows}</strong> new UFS-only rows (@ufs.ac.za emails).</p>
-            <p>📊 Final total rows in template: <strong>${rows.length}</strong>.</p>`;
+        return table;
     }
 
     function escapeHtml(text) {
