@@ -25,9 +25,6 @@ document.addEventListener('DOMContentLoaded', function () {
         "FormerInstitution"
     ];
 
-    // Minimal required columns:
-    // Matching needs at least one of Email OR ORCID present in the data.
-    // We'll validate that at least one of these two exists; DOI/UT are optional to avoid false failures.
     const REQUIRED_TEMPLATE_HEADERS = ["PersonID", "AuthorID", "EmailAddress"];
     const AT_LEAST_ONE_OF_DATA = ["Email Addresses", "ORCIDs"];
 
@@ -48,7 +45,7 @@ document.addEventListener('DOMContentLoaded', function () {
             if (templateData.length === 0) throw new Error("Template is empty.");
             ensureContainsAll(Object.keys(templateData[0]), REQUIRED_TEMPLATE_HEADERS, "Template");
 
-            // Build lookup maps for matching
+            // Build lookup maps
             const emailToTemplateRows = {};
             const authorIdToTemplateRows = {};
             templateData.forEach(row => {
@@ -76,27 +73,18 @@ document.addEventListener('DOMContentLoaded', function () {
             }
             if (allDataRows.length === 0) throw new Error("No data rows found in data files.");
 
-            // Start with original template rows
             const outputRows = [...templateData];
-
-            // Buckets for reporting
-            const matchedRows = [];    // rows we added because we matched template + added DOI/UT
-            const addedUfsRows = [];   // new rows from unmatched @ufs.ac.za
-
-            // To avoid duplicate additions (same person + same DOI/UT)
-            const seenKeys = new Set(); // key: identity|doi|ut
+            const matchedRows = [];
+            const addedUfsRows = [];
+            const seenKeys = new Set();
 
             // --- Process each data row ---
             for (const row of allDataRows) {
-                // Extract candidates for matching
                 const emailCandidates = extractEmails(row["Email Addresses"]);
                 const orcidCandidates = extractOrcids(row["ORCIDs"]);
-
-                // Robustly extract DOI(s) and UT(s) from the entire row object
                 const doiList = extractDois(row);
                 const utList = extractUts(row);
 
-                // Collect matching template rows by email and/or ORCID
                 let matchedTemplateRows = [];
                 emailCandidates.forEach(e => {
                     if (emailToTemplateRows[e]) matchedTemplateRows.push(...emailToTemplateRows[e]);
@@ -105,20 +93,14 @@ document.addEventListener('DOMContentLoaded', function () {
                     if (authorIdToTemplateRows[o]) matchedTemplateRows.push(...authorIdToTemplateRows[o]);
                 });
 
-                // If we matched someone in the template, replicate identity and attach DOI/UT
                 if (matchedTemplateRows.length > 0) {
-                    // If we found no DOI/UT at all, skip enrichment for this data row
-                    // (we still count enrichment ONLY when we actually add at least one DOI or UT).
                     const hadAnythingToAdd = (doiList.length > 0) || (utList.length > 0);
                     if (!hadAnythingToAdd) continue;
 
-                    // For each matched base row, append rows for each DOI/UT found
                     for (const baseRow of matchedTemplateRows) {
                         const identityKey = ((baseRow.EmailAddress || baseRow.AuthorID || baseRow.PersonID || '') + '').toLowerCase();
 
                         const pairs = pairDoisUts(doiList, utList);
-                        let addedForThisBase = 0;
-
                         for (const [doi, ut] of pairs) {
                             const key = `${identityKey}|${doi}|${ut}`;
                             if (seenKeys.has(key)) continue;
@@ -129,33 +111,13 @@ document.addEventListener('DOMContentLoaded', function () {
                             outputRows.push(newRow);
                             matchedRows.push(newRow);
                             seenKeys.add(key);
-                            addedForThisBase++;
-                        }
-
-                        // If there were no pairs (e.g., only one DOI or UT was empty array),
-                        // ensure at least one enriched row if either DOI or UT exists.
-                        if (addedForThisBase === 0 && hadAnythingToAdd) {
-                            const doi = doiList[0] || '';
-                            const ut = utList[0] || '';
-                            const fallbackKey = `${identityKey}|${doi}|${ut}`;
-                            if (!seenKeys.has(fallbackKey)) {
-                                const newRow = { ...baseRow };
-                                newRow.DocumentID = doi;
-                                newRow["UT (Unique WOS ID)"] = ut;
-                                outputRows.push(newRow);
-                                matchedRows.push(newRow);
-                                seenKeys.add(fallbackKey);
-                            }
                         }
                     }
                 } else {
-                    // No match in template — if any @ufs.ac.za email exists, add new rows
                     const ufsEmail = emailCandidates.find(e => e.endsWith("@ufs.ac.za"));
                     if (ufsEmail) {
                         const identityKey = (ufsEmail || orcidCandidates[0] || '').toLowerCase();
-
                         const pairs = pairDoisUts(doiList, utList);
-                        let addedAny = false;
 
                         if (pairs.length > 0) {
                             for (const [doi, ut] of pairs) {
@@ -177,28 +139,6 @@ document.addEventListener('DOMContentLoaded', function () {
                                 outputRows.push(newRow);
                                 addedUfsRows.push(newRow);
                                 seenKeys.add(key);
-                                addedAny = true;
-                            }
-                        } else {
-                            // No DOI/UT found, but still add a single placeholder row with the identity
-                            const key = `${identityKey}||`;
-                            if (!seenKeys.has(key)) {
-                                const newRow = {
-                                    PersonID: '',
-                                    FirstName: '',
-                                    LastName: '',
-                                    OrganizationID: '',
-                                    DocumentID: '',
-                                    "UT (Unique WOS ID)": '',
-                                    AuthorID: orcidCandidates[0] || '',
-                                    EmailAddress: ufsEmail,
-                                    OtherNames: '',
-                                    FormerInstitution: ''
-                                };
-                                outputRows.push(newRow);
-                                addedUfsRows.push(newRow);
-                                seenKeys.add(key);
-                                addedAny = true;
                             }
                         }
                     }
@@ -216,14 +156,13 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
 
-    // ---------- Helper functions ----------
-
+    // ---------- Helpers ----------
     function readFileAsText(file) {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = e => {
                 let text = e.target.result;
-                if (text && text.length && text.charCodeAt(0) === 0xFEFF) text = text.slice(1); // strip BOM
+                if (text && text.length && text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
                 resolve(text);
             };
             reader.onerror = reject;
@@ -233,21 +172,16 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function parseDelimitedFile(text) {
         const firstLine = (text.split('\n')[0] || '');
-        // prefer comma if present, else fall back to tab
         const delimiter = firstLine.includes(',') ? ',' : '\t';
-
         const lines = text.trim().split('\n');
         if (!lines.length) return [];
-
         const headers = splitRow(lines[0], delimiter).map(h => h.trim());
         const rows = [];
         for (let i = 1; i < lines.length; i++) {
             if (!lines[i].trim()) continue;
             const values = splitRow(lines[i], delimiter);
             const row = {};
-            headers.forEach((header, idx) => {
-                row[header] = (values[idx] || '').trim();
-            });
+            headers.forEach((header, idx) => row[header] = (values[idx] || '').trim());
             rows.push(row);
         }
         return rows;
@@ -282,36 +216,23 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!present) throw new Error(`${fileType} file must contain at least one of: ${options.join(', ')}`);
     }
 
-    // --- Extractors ---
-
-    function extractEmails(emailFieldValue) {
-        if (!emailFieldValue) return [];
-        return emailFieldValue
-            .split(';')
-            .map(e => e.trim().toLowerCase())
-            .filter(e => e && e.includes('@'));
+    function extractEmails(val) {
+        if (!val) return [];
+        return val.split(';').map(e => e.trim().toLowerCase()).filter(e => e.includes('@'));
     }
 
-    function extractOrcids(orcidFieldValue) {
-        if (!orcidFieldValue) return [];
+    function extractOrcids(val) {
+        if (!val) return [];
         const re = /\b\d{4}-\d{4}-\d{4}-\d{4}\b/g;
-        const found = orcidFieldValue.match(re) || [];
-        // normalize to lowercase for matching
-        return Array.from(new Set(found.map(x => x.toLowerCase())));
+        return Array.from(new Set((val.match(re) || []).map(x => x.toLowerCase())));
     }
 
     function extractDois(rowObj) {
-        // Check known DOI headers first (various spellings), then regex scan over all fields
         const candidates = [];
-        const knownHeaders = ["DOI", "DoI", "DOIs", "DI", "Di", "di"];
-        knownHeaders.forEach(h => {
-            if (rowObj[h]) candidates.push(rowObj[h]);
-        });
-        // include whole row text for scanning
+        const knownHeaders = ["DOI", "DoI", "DOIs", "DI"];
+        knownHeaders.forEach(h => { if (rowObj[h]) candidates.push(rowObj[h]); });
         const allText = Object.values(rowObj).join(' ; ');
         if (allText) candidates.push(allText);
-
-        // RFC-ish DOI pattern (pragmatic)
         const doiRe = /\b10\.\d{4,9}\/[^\s";,<>]+/gi;
         const out = new Set();
         for (const chunk of candidates) {
@@ -322,104 +243,63 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function extractUts(rowObj) {
-        // Look at likely headers then scan for WOS: patterns anywhere
         const values = [];
-        const likelyHeaders = ["UT (Unique WOS ID)", "UT", "Accession Number", "WOS ID", "WoS ID", "UT_ID"];
-        likelyHeaders.forEach(h => {
-            if (rowObj[h]) values.push(rowObj[h]);
-        });
-        // scan everything
+        const likelyHeaders = ["UT (Unique WOS ID)", "UT", "Accession Number", "WOS ID", "WoS ID"];
+        likelyHeaders.forEach(h => { if (rowObj[h]) values.push(rowObj[h]); });
         const allText = Object.values(rowObj).join(' ; ');
         if (allText) values.push(allText);
-
         const out = new Set();
-
-        // 1) canonical WOS: pattern
-        const wosRe = /WOS:[A-Z0-9-]+/gi;
+        const wosRe = /WOS:\d+/gi;
         for (const chunk of values) {
             const m = chunk.match(wosRe);
-            if (m) m.forEach(v => out.add(cleanTail(v.toUpperCase())));
+            if (m) m.forEach(v => out.add(v.toUpperCase()));
         }
-
-        // 2) sometimes UT contains only the numeric part; we keep as-is if clearly UT-like (>= 8 digits)
-        const utLooseRe = /\b\d{8,}\b/g;
-        for (const chunk of values) {
-            const m = chunk.match(utLooseRe);
-            if (m) m.forEach(v => out.add(cleanTail(v)));
-        }
-
         return Array.from(out);
     }
 
     function cleanTail(s) {
-        // remove trailing punctuation like ; , . ) ]
         return (s || '').replace(/[\s'")\];,:.]+$/g, '');
     }
 
-    // Pair DOI/UT lists sensibly:
-    // - If both present, pair index-to-index, reusing last item when lengths differ
-    // - If only one side present, return that side with empty for the other
     function pairDoisUts(dois, uts) {
-        const d = dois || [];
-        const u = uts || [];
-
-        if (d.length === 0 && u.length === 0) return [];
-
-        if (d.length === 0) {
-            return u.map(ut => ['', ut]);
-        }
-        if (u.length === 0) {
-            return d.map(doi => [doi, '']);
-        }
-
-        const n = Math.max(d.length, u.length);
+        const uniqueDois = Array.from(new Set(dois));
+        const uniqueUts = Array.from(new Set(uts));
+        if (uniqueDois.length === 0 && uniqueUts.length === 0) return [];
+        if (uniqueDois.length === 0) return uniqueUts.map(ut => ['', ut]);
+        if (uniqueUts.length === 0) return uniqueDois.map(doi => [doi, '']);
         const pairs = [];
-        for (let i = 0; i < n; i++) {
-            pairs.push([ d[Math.min(i, d.length - 1)], u[Math.min(i, u.length - 1)] ]);
-        }
+        uniqueDois.forEach((doi, i) => {
+            const ut = uniqueUts[Math.min(i, uniqueUts.length - 1)];
+            pairs.push([doi, ut]);
+        });
         return pairs;
     }
 
-    // ---------- UI rendering ----------
-
+    // ---------- UI ----------
     function displayResults(allRows, matchedRows, addedUfsRows) {
         if (allRows.length === 0) {
             previewDiv.innerHTML = "<p>No results to display.</p>";
             return;
         }
-
         const headers = TEMPLATE_HEADERS;
         let html = `
-            <div class="legend">
-                <span><span class="legend-box legend-blue"></span> Matched & Enriched</span>
-                <span><span class="legend-box legend-green"></span> New UFS-only</span>
-                <span><span class="legend-box legend-gray"></span> Final Combined</span>
-            </div>
+            <h3>🔗 Matched & Enriched Rows (${matchedRows.length})</h3>
+            ${buildTable(matchedRows, headers)}
+            <h3>🟢 New UFS-only Rows (${addedUfsRows.length})</h3>
+            ${buildTable(addedUfsRows, headers)}
+            <h3>📊 Final Combined Template (${allRows.length})</h3>
+            ${buildTable(allRows, headers)}
         `;
-
-        // Matched table
-        html += `<h3>🔗 Matched & Enriched Rows (${matchedRows.length})</h3>`;
-        html += buildTable(matchedRows, headers, "matched-table");
-
-        // Added UFS rows table
-        html += `<h3>🟢 New UFS-only Rows (${addedUfsRows.length})</h3>`;
-        html += buildTable(addedUfsRows, headers, "ufs-table");
-
-        // Final combined table
-        html += `<h3>📊 Final Combined Template (${allRows.length})</h3>`;
-        html += buildTable(allRows, headers, "final-table");
-
         previewDiv.innerHTML = html;
-
         statsDiv.innerHTML = `
             <p>🔗 Enriched <strong>${matchedRows.length}</strong> rows with DOI/UT links from data file.</p>
             <p>🟢 Added <strong>${addedUfsRows.length}</strong> new UFS-only rows (@ufs.ac.za emails).</p>
             <p>📊 Final total rows in template: <strong>${allRows.length}</strong>.</p>`;
     }
 
-    function buildTable(rows, headers, cssClass) {
+    function buildTable(rows, headers) {
         if (!rows || rows.length === 0) return "<p>No rows.</p>";
-        let table = `<table class="${cssClass}"><thead><tr>`;
+        let table = `<table><thead><tr>`;
         headers.forEach(h => table += `<th>${escapeHtml(h)}</th>`);
         table += `</tr></thead><tbody>`;
         rows.forEach(row => {
@@ -444,7 +324,6 @@ document.addEventListener('DOMContentLoaded', function () {
         rows.forEach(row => {
             csv += headers.map(h => `"${((row[h] || '') + '').replace(/"/g, '""')}"`).join(',') + '\n';
         });
-
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
@@ -468,7 +347,6 @@ document.addEventListener('DOMContentLoaded', function () {
             headers.forEach(h => obj[h] = r[h] || '');
             return obj;
         });
-
         const ws = XLSX.utils.json_to_sheet(normalizedRows, { header: headers });
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "Results");
