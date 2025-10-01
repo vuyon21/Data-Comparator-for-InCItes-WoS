@@ -25,9 +25,9 @@ document.addEventListener('DOMContentLoaded', function () {
         "FormerInstitution"
     ];
 
-    // Required columns for Template and Data
+    // Required columns
     const REQUIRED_TEMPLATE_HEADERS = ["PersonID", "AuthorID", "EmailAddress"];
-    const REQUIRED_DATA_HEADERS = ["Staff/student number", "ORCID", "Email", "Name", "Department/School/Unit"];
+    const REQUIRED_DATA_HEADERS = ["Name", "Email Addresses", "ORCIDs", "DOI", "UT (Unique WOS ID)", "Department/School/Unit", "Staff/student number"];
 
     [templateInput, dataInput].forEach(input => {
         input.addEventListener('change', () => {
@@ -46,10 +46,21 @@ document.addEventListener('DOMContentLoaded', function () {
             if (templateData.length === 0) throw new Error("Template is empty.");
             validateHeaders(Object.keys(templateData[0]), REQUIRED_TEMPLATE_HEADERS, "Template");
 
-            // Build sets for quick matching
-            const personIdSet = new Set(templateData.map(r => (r.PersonID || '').trim().toLowerCase()));
-            const authorIdSet = new Set(templateData.map(r => (r.AuthorID || '').trim().toLowerCase()));
-            const emailSet = new Set(templateData.map(r => (r.EmailAddress || '').trim().toLowerCase()));
+            // Build lookup maps
+            const emailToTemplateRows = {};
+            const authorIdToTemplateRows = {};
+            templateData.forEach(row => {
+                const email = (row.EmailAddress || '').trim().toLowerCase();
+                const authorId = (row.AuthorID || '').trim().toLowerCase();
+                if (email) {
+                    if (!emailToTemplateRows[email]) emailToTemplateRows[email] = [];
+                    emailToTemplateRows[email].push(row);
+                }
+                if (authorId) {
+                    if (!authorIdToTemplateRows[authorId]) authorIdToTemplateRows[authorId] = [];
+                    authorIdToTemplateRows[authorId].push(row);
+                }
+            });
 
             // --- Load Data Files ---
             allDataRows = [];
@@ -63,47 +74,72 @@ document.addEventListener('DOMContentLoaded', function () {
             }
             if (allDataRows.length === 0) throw new Error("No data rows found in data files.");
 
-            // Start with original template rows
             const outputRows = [...templateData];
-            let newCount = 0;
-            let matchedCount = 0;
+            let matchedLinks = 0;
+            let addedUfsRows = 0;
 
-            // --- Compare and Append ---
+            // --- Compare and Enrich ---
             for (const row of allDataRows) {
-                const personId = (row['Staff/student number'] || '').trim().toLowerCase();
-                const authorId = (row['ORCID'] || '').trim().toLowerCase();
-                const email = (row['Email'] || '').trim().toLowerCase();
-
-                // If already exists → count as matched and skip
-                if (personIdSet.has(personId) || authorIdSet.has(authorId) || emailSet.has(email)) {
-                    matchedCount++;
-                    continue;
+                // Extract email candidates
+                const emailCandidates = [];
+                if (row['Email Addresses']) {
+                    row['Email Addresses'].split(';').forEach(e => {
+                        const email = e.trim().toLowerCase();
+                        if (email && email.includes('@')) emailCandidates.push(email);
+                    });
                 }
 
-                // Otherwise, append new row
-                const newRow = {
-                    PersonID: row['Staff/student number'] || '',
-                    FirstName: row['Name'] ? row['Name'].split(' ')[0] : '',
-                    LastName: row['Name'] ? row['Name'].split(' ').slice(1).join(' ') : '',
-                    OrganizationID: row['Department/School/Unit'] || '',
-                    DocumentID: '',
-                    "UT (Unique WOS ID)": '',
-                    AuthorID: row['ORCID'] || '',
-                    EmailAddress: row['Email'] || '',
-                    OtherNames: '',
-                    FormerInstitution: ''
-                };
+                // Extract ORCID candidates
+                const orcidCandidates = [];
+                if (row['ORCIDs']) {
+                    const matches = row['ORCIDs'].match(/\d{4}-\d{4}-\d{4}-\d{4}/g);
+                    if (matches) orcidCandidates.push(...matches.map(m => m.toLowerCase()));
+                }
 
-                outputRows.push(newRow);
-                newCount++;
+                const doi = (row['DOI'] || '').trim();
+                const ut = (row['UT (Unique WOS ID)'] || '').trim();
 
-                // Update sets so duplicates from data are not re-added
-                if (personId) personIdSet.add(personId);
-                if (authorId) authorIdSet.add(authorId);
-                if (email) emailSet.add(email);
+                // Collect matching template rows
+                let matchedTemplateRows = [];
+                emailCandidates.forEach(e => {
+                    if (emailToTemplateRows[e]) matchedTemplateRows.push(...emailToTemplateRows[e]);
+                });
+                orcidCandidates.forEach(o => {
+                    if (authorIdToTemplateRows[o]) matchedTemplateRows.push(...authorIdToTemplateRows[o]);
+                });
+
+                if (matchedTemplateRows.length > 0) {
+                    // Enrich template rows
+                    matchedTemplateRows.forEach(baseRow => {
+                        const newRow = { ...baseRow };
+                        newRow.DocumentID = doi || baseRow.DocumentID || '';
+                        newRow["UT (Unique WOS ID)"] = ut || baseRow["UT (Unique WOS ID)"] || '';
+                        outputRows.push(newRow);
+                        matchedLinks++;
+                    });
+                } else {
+                    // --- UFS-only rows: add new entry if ufs.ac.za email exists
+                    const ufsEmail = emailCandidates.find(e => e.endsWith("@ufs.ac.za"));
+                    if (ufsEmail) {
+                        const newRow = {
+                            PersonID: row['Staff/student number'] || '',
+                            FirstName: row['Name'] ? row['Name'].split(' ')[0] : '',
+                            LastName: row['Name'] ? row['Name'].split(' ').slice(1).join(' ') : '',
+                            OrganizationID: row['Department/School/Unit'] || '',
+                            DocumentID: doi,
+                            "UT (Unique WOS ID)": ut,
+                            AuthorID: orcidCandidates.length > 0 ? orcidCandidates[0] : '',
+                            EmailAddress: ufsEmail,
+                            OtherNames: '',
+                            FormerInstitution: ''
+                        };
+                        outputRows.push(newRow);
+                        addedUfsRows++;
+                    }
+                }
             }
 
-            displayResults(outputRows, newCount, matchedCount, allDataRows.length);
+            displayResults(outputRows, matchedLinks, addedUfsRows);
             resultSection.style.display = 'block';
 
             downloadCsvBtn.onclick = () => downloadCSV(outputRows);
@@ -174,7 +210,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    function displayResults(rows, newCount, matchedCount, totalDataRows) {
+    function displayResults(rows, matchedLinks, addedUfsRows) {
         if (rows.length === 0) {
             previewDiv.innerHTML = "<p>No results to display.</p>";
             return;
@@ -192,14 +228,10 @@ document.addEventListener('DOMContentLoaded', function () {
         table += `</tbody></table>`;
 
         previewDiv.innerHTML = table;
-
-        const matchPercent = totalDataRows > 0 ? ((matchedCount / totalDataRows) * 100).toFixed(1) : 0;
-        const newPercent = totalDataRows > 0 ? ((newCount / totalDataRows) * 100).toFixed(1) : 0;
-
         statsDiv.innerHTML = `
-            <p>✅ Added <strong>${newCount}</strong> new rows (${newPercent}% of data rows).</p>
-            <p>🔍 Matched <strong>${matchedCount}</strong> existing rows (${matchPercent}% of data rows).</p>
-            <p>📊 Final total in template: <strong>${rows.length}</strong>.</p>`;
+            <p>🔗 Enriched <strong>${matchedLinks}</strong> rows with DOI/UT links from data file.</p>
+            <p>🟢 Added <strong>${addedUfsRows}</strong> new UFS-only rows (@ufs.ac.za emails).</p>
+            <p>📊 Final total rows in template: <strong>${rows.length}</strong>.</p>`;
     }
 
     function escapeHtml(text) {
