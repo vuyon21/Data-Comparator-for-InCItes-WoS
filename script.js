@@ -1,20 +1,15 @@
 document.addEventListener('DOMContentLoaded', function () {
-    const templateInput = document.getElementById('templateFile');
-    const dataInput = document.getElementById('dataFiles');
+    const fileInput = document.getElementById('templateFile'); // now only one file input
     const processBtn = document.getElementById('processBtn');
     const resultSection = document.getElementById('resultSection');
     const statsDiv = document.getElementById('stats');
     const previewDiv = document.getElementById('preview');
     const downloadCsvBtn = document.getElementById('downloadCsv');
     const downloadExcelBtn = document.getElementById('downloadExcel');
+    const downloadButtons = document.getElementById('downloadButtons');
 
-    // New gaps download buttons
-    let downloadGapsCsvBtn, downloadGapsExcelBtn;
+    let allRows = [];
 
-    let templateData = null;
-    let allDataRows = [];
-
-    // Fixed Template column order
     const TEMPLATE_HEADERS = [
         "PersonID",
         "FirstName",
@@ -28,169 +23,52 @@ document.addEventListener('DOMContentLoaded', function () {
         "FormerInstitution"
     ];
 
-    const REQUIRED_TEMPLATE_HEADERS = ["PersonID", "AuthorID", "EmailAddress"];
-    const AT_LEAST_ONE_OF_DATA = ["Email Addresses", "ORCIDs"];
-
-    [templateInput, dataInput].forEach(input => {
+    [fileInput].forEach(input => {
         input.addEventListener('change', () => {
-            processBtn.disabled = !(templateInput.files.length > 0 && dataInput.files.length > 0);
+            processBtn.disabled = !(fileInput.files.length > 0);
         });
     });
 
     processBtn.addEventListener('click', async () => {
         clearResults();
         try {
-            // --- Load Template ---
-            const templateFile = templateInput.files[0];
-            const templateText = await readFileAsText(templateFile);
-            templateData = parseDelimitedFile(templateText);
+            const file = fileInput.files[0];
+            const text = await readFileAsText(file);
+            allRows = parseDelimitedFile(text);
 
-            if (templateData.length === 0) throw new Error("Template is empty.");
-            ensureContainsAll(Object.keys(templateData[0]), REQUIRED_TEMPLATE_HEADERS, "Template");
+            if (allRows.length === 0) throw new Error("File is empty.");
 
-            const emailToTemplateRows = {};
-            const authorIdToTemplateRows = {};
-            templateData.forEach(row => {
-                const email = (row.EmailAddress || '').trim().toLowerCase();
-                const authorId = (row.AuthorID || '').trim().toLowerCase();
-                if (email) {
-                    if (!emailToTemplateRows[email]) emailToTemplateRows[email] = [];
-                    emailToTemplateRows[email].push(row);
-                }
-                if (authorId) {
-                    if (!authorIdToTemplateRows[authorId]) authorIdToTemplateRows[authorId] = [];
-                    authorIdToTemplateRows[authorId].push(row);
-                }
-            });
-
-            // --- Load Data Files ---
-            allDataRows = [];
-            for (const file of dataInput.files) {
-                const dataText = await readFileAsText(file);
-                const rows = parseDelimitedFile(dataText);
-                if (rows.length > 0) {
-                    ensureContainsAtLeastOne(Object.keys(rows[0]), AT_LEAST_ONE_OF_DATA, "Data");
-                }
-                allDataRows.push(...rows);
-            }
-            if (allDataRows.length === 0) throw new Error("No data rows found in data files.");
-
-            const outputRows = [...templateData];
-            const matchedRows = [];
-            const addedUfsRows = [];
-            const seenKeys = new Set();
-
-            // --- Process each data row ---
-            for (const row of allDataRows) {
-                const emailCandidates = extractEmails(row["Email Addresses"]);
-                const orcidCandidates = extractOrcids(row["ORCIDs"]);
-                const doiList = extractDois(row);
-                const utList = extractUts(row);
-
-                let matchedTemplateRows = [];
-                emailCandidates.forEach(e => {
-                    if (emailToTemplateRows[e]) matchedTemplateRows.push(...emailToTemplateRows[e]);
-                });
-                orcidCandidates.forEach(o => {
-                    if (authorIdToTemplateRows[o]) matchedTemplateRows.push(...authorIdToTemplateRows[o]);
-                });
-
-                if (matchedTemplateRows.length > 0) {
-                    const hadAnythingToAdd = (doiList.length > 0) || (utList.length > 0);
-                    if (!hadAnythingToAdd) continue;
-
-                    for (const baseRow of matchedTemplateRows) {
-                        const identityKey = ((baseRow.EmailAddress || baseRow.AuthorID || baseRow.PersonID || '') + '').toLowerCase();
-                        const pairs = pairDoisUts(doiList, utList);
-                        let addedForThisBase = 0;
-
-                        for (const [doi, ut] of pairs) {
-                            const key = `${identityKey}|${doi}|${ut}`;
-                            if (seenKeys.has(key)) continue;
-                            const newRow = { ...baseRow };
-                            newRow.DocumentID = doi || '';
-                            newRow["UT (Unique WOS ID)"] = ut || '';
-                            outputRows.push(newRow);
-                            matchedRows.push(newRow);
-                            seenKeys.add(key);
-                            addedForThisBase++;
-                        }
-
-                        if (addedForThisBase === 0 && hadAnythingToAdd) {
-                            const doi = doiList[0] || '';
-                            const ut = utList[0] || '';
-                            const fallbackKey = `${identityKey}|${doi}|${ut}`;
-                            if (!seenKeys.has(fallbackKey)) {
-                                const newRow = { ...baseRow };
-                                newRow.DocumentID = doi;
-                                newRow["UT (Unique WOS ID)"] = ut;
-                                outputRows.push(newRow);
-                                matchedRows.push(newRow);
-                                seenKeys.add(fallbackKey);
-                            }
-                        }
-                    }
-                } else {
-                    const ufsEmail = emailCandidates.find(e => e.endsWith("@ufs.ac.za"));
-                    if (ufsEmail) {
-                        const identityKey = (ufsEmail || orcidCandidates[0] || '').toLowerCase();
-                        const pairs = pairDoisUts(doiList, utList);
-                        if (pairs.length > 0) {
-                            for (const [doi, ut] of pairs) {
-                                const key = `${identityKey}|${doi}|${ut}`;
-                                if (seenKeys.has(key)) continue;
-                                const newRow = {
-                                    PersonID: '',
-                                    FirstName: '',
-                                    LastName: '',
-                                    OrganizationID: '',
-                                    DocumentID: doi || '',
-                                    "UT (Unique WOS ID)": ut || '',
-                                    AuthorID: orcidCandidates[0] || '',
-                                    EmailAddress: ufsEmail,
-                                    OtherNames: '',
-                                    FormerInstitution: ''
-                                };
-                                outputRows.push(newRow);
-                                addedUfsRows.push(newRow);
-                                seenKeys.add(key);
-                            }
-                        } else {
-                            const key = `${identityKey}||`;
-                            if (!seenKeys.has(key)) {
-                                const newRow = {
-                                    PersonID: '',
-                                    FirstName: '',
-                                    LastName: '',
-                                    OrganizationID: '',
-                                    DocumentID: '',
-                                    "UT (Unique WOS ID)": '',
-                                    AuthorID: orcidCandidates[0] || '',
-                                    EmailAddress: ufsEmail,
-                                    OtherNames: '',
-                                    FormerInstitution: ''
-                                };
-                                outputRows.push(newRow);
-                                addedUfsRows.push(newRow);
-                                seenKeys.add(key);
-                            }
-                        }
-                    }
-                }
-            }
-
-            // --- Clean redundant rows ---
+            // --- Clean, group, deduplicate ---
             const grouped = {};
-            outputRows.forEach(row => {
+            allRows.forEach(row => {
                 const identity = (row.EmailAddress || row.AuthorID || '').toLowerCase();
+                if (!identity) return;
                 if (!grouped[identity]) grouped[identity] = [];
                 grouped[identity].push(row);
             });
+
             let cleanedRows = [];
+            const matchedRows = [];
+            const seenKeys = new Set();
+
             Object.values(grouped).forEach(group => {
-                const hasDOIorUT = group.some(r => (r.DocumentID && r.DocumentID !== '') || (r["UT (Unique WOS ID)"] && r["UT (Unique WOS ID)"] !== ''));
+                const hasDOIorUT = group.some(r =>
+                    (r.DocumentID && r.DocumentID !== '') ||
+                    (r["UT (Unique WOS ID)"] && r["UT (Unique WOS ID)"] !== '')
+                );
+
                 if (hasDOIorUT) {
-                    cleanedRows.push(...group.filter(r => (r.DocumentID && r.DocumentID !== '') || (r["UT (Unique WOS ID)"] && r["UT (Unique WOS ID)"] !== '')));
+                    group.forEach(r => {
+                        const doi = (r.DocumentID || '').trim();
+                        const ut = (r["UT (Unique WOS ID)"] || '').trim();
+                        const identityKey = (r.EmailAddress || r.AuthorID || '').toLowerCase();
+                        const key = `${identityKey}|${doi}|${ut}`;
+                        if (!seenKeys.has(key) && (doi || ut)) {
+                            cleanedRows.push(r);
+                            matchedRows.push(r);
+                            seenKeys.add(key);
+                        }
+                    });
                 } else {
                     cleanedRows.push(...group);
                 }
@@ -203,25 +81,33 @@ document.addEventListener('DOMContentLoaded', function () {
                 return idA.localeCompare(idB);
             });
 
-            displayResults(cleanedRows, matchedRows, addedUfsRows);
+            // Build Gaps report
+            const gapsRows = getAuthorsWithoutDOIorUT(cleanedRows);
+
+            displayResults(cleanedRows, matchedRows, gapsRows);
             resultSection.style.display = 'block';
 
-            downloadCsvBtn.onclick = () => downloadCSV(cleanedRows, "populated_template.csv");
-            downloadExcelBtn.onclick = () => downloadExcel(cleanedRows, "populated_template.xlsx");
+            downloadCsvBtn.onclick = () => downloadCSV(cleanedRows, "cleaned_template.csv");
+            downloadExcelBtn.onclick = () => downloadExcel(cleanedRows, "cleaned_template.xlsx");
 
-            // Setup gaps downloads
-            const gapsRows = getAuthorsWithoutDOIorUT(cleanedRows);
+            // Gaps buttons
             if (gapsRows.length > 0) {
+                let downloadGapsCsvBtn = document.getElementById("downloadGapsCsv");
+                let downloadGapsExcelBtn = document.getElementById("downloadGapsExcel");
+
                 if (!downloadGapsCsvBtn) {
                     downloadGapsCsvBtn = document.createElement("button");
+                    downloadGapsCsvBtn.id = "downloadGapsCsv";
                     downloadGapsCsvBtn.textContent = "📥 Download Gaps as CSV";
-                    resultSection.appendChild(downloadGapsCsvBtn);
+                    downloadButtons.appendChild(downloadGapsCsvBtn);
                 }
                 if (!downloadGapsExcelBtn) {
                     downloadGapsExcelBtn = document.createElement("button");
+                    downloadGapsExcelBtn.id = "downloadGapsExcel";
                     downloadGapsExcelBtn.textContent = "📥 Download Gaps as Excel";
-                    resultSection.appendChild(downloadGapsExcelBtn);
+                    downloadButtons.appendChild(downloadGapsExcelBtn);
                 }
+
                 downloadGapsCsvBtn.onclick = () => downloadCSV(gapsRows, "gaps_report.csv");
                 downloadGapsExcelBtn.onclick = () => downloadExcel(gapsRows, "gaps_report.xlsx");
             }
@@ -284,118 +170,45 @@ document.addEventListener('DOMContentLoaded', function () {
         return result;
     }
 
-    function ensureContainsAll(actualHeaders, required, fileType) {
-        const missing = required.filter(h => !actualHeaders.includes(h));
-        if (missing.length > 0) throw new Error(`${fileType} file is missing required columns: ${missing.join(', ')}`);
-    }
-
-    function ensureContainsAtLeastOne(actualHeaders, options, fileType) {
-        const present = options.some(h => actualHeaders.includes(h));
-        if (!present) throw new Error(`${fileType} file must contain at least one of: ${options.join(', ')}`);
-    }
-
-    function extractEmails(emailFieldValue) {
-        if (!emailFieldValue) return [];
-        return emailFieldValue.split(';').map(e => e.trim().toLowerCase()).filter(e => e && e.includes('@'));
-    }
-
-    function extractOrcids(orcidFieldValue) {
-        if (!orcidFieldValue) return [];
-        const re = /\b\d{4}-\d{4}-\d{4}-\d{4}\b/g;
-        const found = orcidFieldValue.match(re) || [];
-        return Array.from(new Set(found.map(x => x.toLowerCase())));
-    }
-
-    function extractDois(rowObj) {
-        const candidates = [];
-        const knownHeaders = ["DOI", "DoI", "DOIs"];
-        knownHeaders.forEach(h => {
-            if (rowObj[h]) candidates.push(rowObj[h]);
+    function getAuthorsWithoutDOIorUT(rows) {
+        const grouped = {};
+        rows.forEach(row => {
+            const identity = (row.EmailAddress || row.AuthorID || '').toLowerCase();
+            if (!grouped[identity]) grouped[identity] = [];
+            grouped[identity].push(row);
         });
-        const allText = Object.values(rowObj).join(' ; ');
-        if (allText) candidates.push(allText);
-        const doiRe = /\b10\.\d{4,9}\/[^\s";,<>]+/gi;
-        const out = new Set();
-        for (const chunk of candidates) {
-            const m = chunk.match(doiRe);
-            if (m) m.forEach(v => out.add(cleanTail(v)));
-        }
-        return Array.from(out);
-    }
-
-    function extractUts(rowObj) {
-        const values = [];
-        const likelyHeaders = ["UT (Unique WOS ID)", "UT", "WOS ID", "WoS ID"];
-        likelyHeaders.forEach(h => {
-            if (rowObj[h]) values.push(rowObj[h]);
+        const out = [];
+        Object.values(grouped).forEach(group => {
+            const hasDOIorUT = group.some(r =>
+                (r.DocumentID && r.DocumentID !== '') ||
+                (r["UT (Unique WOS ID)"] && r["UT (Unique WOS ID)"] !== '')
+            );
+            if (!hasDOIorUT) out.push(...group);
         });
-        const allText = Object.values(rowObj).join(' ; ');
-        if (allText) values.push(allText);
-        const out = new Set();
-        const wosRe = /WOS:[A-Z0-9-]+/gi;
-        for (const chunk of values) {
-            const m = chunk.match(wosRe);
-            if (m) m.forEach(v => out.add(cleanTail(v.toUpperCase())));
-        }
-        return Array.from(out);
+        return out;
     }
 
-    function cleanTail(s) {
-        return (s || '').replace(/[\s'")\];,:.]+$/g, '');
-    }
-
-    function pairDoisUts(dois, uts) {
-        const d = dois || [];
-        const u = uts || [];
-        if (d.length === 0 && u.length === 0) return [];
-        if (d.length === 0) return u.map(ut => ['', ut]);
-        if (u.length === 0) return d.map(doi => [doi, '']);
-        const n = Math.max(d.length, u.length);
-        const pairs = [];
-        for (let i = 0; i < n; i++) {
-            pairs.push([ d[Math.min(i, d.length - 1)], u[Math.min(i, u.length - 1)] ]);
-        }
-        return pairs;
-    }
-
-    // ---------- UI rendering ----------
-    function displayResults(allRows, matchedRows, addedUfsRows) {
+    function displayResults(allRows, matchedRows, gapsRows) {
         if (allRows.length === 0) {
             previewDiv.innerHTML = "<p>No results to display.</p>";
             return;
         }
         const headers = TEMPLATE_HEADERS;
 
-        const grouped = {};
-        allRows.forEach(row => {
-            const identity = (row.EmailAddress || row.AuthorID || '').toLowerCase();
-            if (!grouped[identity]) grouped[identity] = [];
-            grouped[identity].push(row);
-        });
-        let authorsWithoutDOIorUT = 0;
-        Object.values(grouped).forEach(group => {
-            const hasDOIorUT = group.some(r =>
-                (r.DocumentID && r.DocumentID !== '') ||
-                (r["UT (Unique WOS ID)"] && r["UT (Unique WOS ID)"] !== '')
-            );
-            if (!hasDOIorUT) authorsWithoutDOIorUT++;
-        });
-
         let html = `
             <h3>🔗 Matched & Enriched Rows (${matchedRows.length})</h3>
             ${buildTable(matchedRows, headers)}
-            <h3>🟢 New UFS-only Rows (${addedUfsRows.length})</h3>
-            ${buildTable(addedUfsRows, headers)}
-            <h3>📊 Final Combined Template (${allRows.length})</h3>
+            <h3>⚠️ Authors without DOI/UT (${gapsRows.length})</h3>
+            ${buildTable(gapsRows, headers)}
+            <h3>📊 Final Cleaned Template (${allRows.length})</h3>
             ${buildTable(allRows, headers)}
         `;
         previewDiv.innerHTML = html;
 
         statsDiv.innerHTML = `
-            <p>🔗 Enriched <strong>${matchedRows.length}</strong> rows with DOI/UT links from data file.</p>
-            <p>🟢 Added <strong>${addedUfsRows.length}</strong> new UFS-only rows (@ufs.ac.za emails).</p>
-            <p>📊 Final total rows in template: <strong>${allRows.length}</strong>.</p>
-            <p>⚠️ Authors still without any DOI/UT: <strong>${authorsWithoutDOIorUT}</strong>.</p>
+            <p>🔗 Enriched rows (with DOI/UT): <strong>${matchedRows.length}</strong></p>
+            <p>⚠️ Authors still without DOI/UT: <strong>${gapsRows.length}</strong></p>
+            <p>📊 Final total rows in file: <strong>${allRows.length}</strong></p>
         `;
     }
 
@@ -419,7 +232,6 @@ document.addEventListener('DOMContentLoaded', function () {
         return div.innerHTML;
     }
 
-    // --- CSV/Excel download helpers ---
     function downloadCSV(rows, filename) {
         if (!rows || rows.length === 0) return;
         const groupedRows = [...rows].sort((a, b) => {
@@ -464,24 +276,6 @@ document.addEventListener('DOMContentLoaded', function () {
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "Results");
         XLSX.writeFile(wb, filename);
-    }
-
-    function getAuthorsWithoutDOIorUT(rows) {
-        const grouped = {};
-        rows.forEach(row => {
-            const identity = (row.EmailAddress || row.AuthorID || '').toLowerCase();
-            if (!grouped[identity]) grouped[identity] = [];
-            grouped[identity].push(row);
-        });
-        const out = [];
-        Object.values(grouped).forEach(group => {
-            const hasDOIorUT = group.some(r =>
-                (r.DocumentID && r.DocumentID !== '') ||
-                (r["UT (Unique WOS ID)"] && r["UT (Unique WOS ID)"] !== '')
-            );
-            if (!hasDOIorUT) out.push(...group);
-        });
-        return out;
     }
 
     function showError(message) {
