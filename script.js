@@ -221,15 +221,15 @@ document.addEventListener('DOMContentLoaded', function () {
 
         // Matched table
         html += `<h3>🔗 Matched & Enriched Rows (${matchedRows.length})</h3>`;
-        html += buildTable(matchedRows, headers);
+        html += buildTable(matchedRows, headers, "matched-table");
 
         // Added UFS rows table
         html += `<h3>🟢 New UFS-only Rows (${addedUfsRows.length})</h3>`;
-        html += buildTable(addedUfsRows, headers);
+        html += buildTable(addedUfsRows, headers, "ufs-table");
 
         // Final combined table
         html += `<h3>📊 Final Combined Template (${allRows.length})</h3>`;
-        html += buildTable(allRows, headers);
+        html += buildTable(allRows, headers, "final-table");
 
         previewDiv.innerHTML = html;
 
@@ -239,9 +239,9 @@ document.addEventListener('DOMContentLoaded', function () {
             <p>📊 Final total rows in template: <strong>${allRows.length}</strong>.</p>`;
     }
 
-    function buildTable(rows, headers) {
+    function buildTable(rows, headers, cssClass) {
         if (rows.length === 0) return "<p>No rows.</p>";
-        let table = `<table><thead><tr>`;
+        let table = `<table class="${cssClass}"><thead><tr>`;
         headers.forEach(h => table += `<th>${escapeHtml(h)}</th>`);
         table += `</tr></thead><tbody>`;
         rows.forEach(row => {
