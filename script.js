@@ -217,7 +217,13 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         const headers = TEMPLATE_HEADERS;
-        let html = "";
+        let html = `
+            <div class="legend">
+                <span><span class="legend-box legend-blue"></span> Matched & Enriched</span>
+                <span><span class="legend-box legend-green"></span> New UFS-only</span>
+                <span><span class="legend-box legend-gray"></span> Final Combined</span>
+            </div>
+        `;
 
         // Matched table
         html += `<h3>🔗 Matched & Enriched Rows (${matchedRows.length})</h3>`;
