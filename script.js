@@ -1,15 +1,17 @@
 document.addEventListener('DOMContentLoaded', function () {
     const templateInput = document.getElementById('templateFile');
+    const dataInput = document.getElementById('dataFiles');
     const processBtn = document.getElementById('processBtn');
     const resultSection = document.getElementById('resultSection');
     const statsDiv = document.getElementById('stats');
     const previewDiv = document.getElementById('preview');
     const downloadCsvBtn = document.getElementById('downloadCsv');
     const downloadExcelBtn = document.getElementById('downloadExcel');
-    const downloadButtonsDiv = document.getElementById('downloadButtons');
 
-    let allRows = [];
+    let templateData = null;
+    let allDataRows = [];
 
+    // Fixed Template column order
     const TEMPLATE_HEADERS = [
         "PersonID",
         "FirstName",
@@ -23,56 +25,131 @@ document.addEventListener('DOMContentLoaded', function () {
         "FormerInstitution"
     ];
 
-    templateInput.addEventListener('change', () => {
-        processBtn.disabled = !(templateInput.files.length > 0);
+    const REQUIRED_TEMPLATE_HEADERS = ["PersonID", "AuthorID", "EmailAddress"];
+    const AT_LEAST_ONE_OF_DATA = ["Email Addresses", "ORCIDs"];
+
+    [templateInput, dataInput].forEach(input => {
+        input.addEventListener('change', () => {
+            processBtn.disabled = !(templateInput.files.length > 0 && dataInput.files.length > 0);
+        });
     });
 
     processBtn.addEventListener('click', async () => {
         clearResults();
         try {
+            // --- Load Template ---
             const templateFile = templateInput.files[0];
-            const text = await readFileAsText(templateFile);
-            allRows = parseDelimitedFile(text);
+            const templateText = await readFileAsText(templateFile);
+            templateData = parseDelimitedFile(templateText);
 
-            if (allRows.length === 0) throw new Error("File is empty.");
+            if (templateData.length === 0) throw new Error("Template is empty.");
+            ensureContainsAll(Object.keys(templateData[0]), REQUIRED_TEMPLATE_HEADERS, "Template");
 
-            // Deduplicate per author and sort
-            const { cleanedRows, exactDuplicates } = groupAndClean(allRows);
+            // Build lookup maps
+            const emailToTemplateRows = {};
+            const authorIdToTemplateRows = {};
+            templateData.forEach(row => {
+                const email = (row.EmailAddress || '').trim().toLowerCase();
+                const authorId = (row.AuthorID || '').trim().toLowerCase();
+                if (email) {
+                    if (!emailToTemplateRows[email]) emailToTemplateRows[email] = [];
+                    emailToTemplateRows[email].push(row);
+                }
+                if (authorId) {
+                    if (!authorIdToTemplateRows[authorId]) authorIdToTemplateRows[authorId] = [];
+                    authorIdToTemplateRows[authorId].push(row);
+                }
+            });
 
-            // Analyze authors
-            const { duplicatesSameUT, multipleDifferentUT, noDOIorUT, withDOIorUT, totalAuthors } = analyzeAuthors(cleanedRows);
+            // --- Load Data Files ---
+            allDataRows = [];
+            for (const file of dataInput.files) {
+                const dataText = await readFileAsText(file);
+                const rows = parseDelimitedFile(dataText);
+                if (rows.length > 0) {
+                    ensureContainsAtLeastOne(Object.keys(rows[0]), AT_LEAST_ONE_OF_DATA, "Data");
+                }
+                allDataRows.push(...rows);
+            }
+            if (allDataRows.length === 0) throw new Error("No data rows found in data files.");
 
-            // Display results
-            displayResults(cleanedRows, duplicatesSameUT, multipleDifferentUT, noDOIorUT, matchedRows(cleanedRows), exactDuplicates);
-            resultSection.style.display = 'block';
+            const outputRows = [...templateData];
+            const matchedRows = [];
+            const addedUfsRows = [];
+            const seenKeys = new Set();
 
-            // Hook up downloads
-            downloadCsvBtn.onclick = () => downloadCSV(cleanedRows, "populated_template.csv");
-            downloadExcelBtn.onclick = () => downloadExcel(cleanedRows, "populated_template.xlsx");
+            // --- Process each data row ---
+            for (const row of allDataRows) {
+                const emailCandidates = extractEmails(row["Email Addresses"]);
+                const orcidCandidates = extractOrcids(row["ORCIDs"]);
+                const doiList = extractDois(row);
+                const utList = extractUts(row);
 
-            // Add gap downloads dynamically
-            if (noDOIorUT.length > 0) {
-                const btnCsv = document.createElement("button");
-                btnCsv.textContent = "📥 Download Gaps as CSV";
-                btnCsv.onclick = () => downloadCSV(noDOIorUT, "authors_without_doi_ut.csv");
+                let matchedTemplateRows = [];
+                emailCandidates.forEach(e => {
+                    if (emailToTemplateRows[e]) matchedTemplateRows.push(...emailToTemplateRows[e]);
+                });
+                orcidCandidates.forEach(o => {
+                    if (authorIdToTemplateRows[o]) matchedTemplateRows.push(...authorIdToTemplateRows[o]);
+                });
 
-                const btnXlsx = document.createElement("button");
-                btnXlsx.textContent = "📥 Download Gaps as Excel";
-                btnXlsx.onclick = () => downloadExcel(noDOIorUT, "authors_without_doi_ut.xlsx");
+                if (matchedTemplateRows.length > 0) {
+                    const hadAnythingToAdd = (doiList.length > 0) || (utList.length > 0);
+                    if (!hadAnythingToAdd) continue;
 
-                downloadButtonsDiv.appendChild(btnCsv);
-                downloadButtonsDiv.appendChild(btnXlsx);
+                    for (const baseRow of matchedTemplateRows) {
+                        const identityKey = ((baseRow.EmailAddress || baseRow.AuthorID || baseRow.PersonID || '') + '').toLowerCase();
+
+                        const pairs = pairDoisUts(doiList, utList);
+                        for (const [doi, ut] of pairs) {
+                            const key = `${identityKey}|${doi}|${ut}`;
+                            if (seenKeys.has(key)) continue;
+
+                            const newRow = { ...baseRow };
+                            newRow.DocumentID = doi || '';
+                            newRow["UT (Unique WOS ID)"] = ut || '';
+                            outputRows.push(newRow);
+                            matchedRows.push(newRow);
+                            seenKeys.add(key);
+                        }
+                    }
+                } else {
+                    const ufsEmail = emailCandidates.find(e => e.endsWith("@ufs.ac.za"));
+                    if (ufsEmail) {
+                        const identityKey = (ufsEmail || orcidCandidates[0] || '').toLowerCase();
+                        const pairs = pairDoisUts(doiList, utList);
+
+                        if (pairs.length > 0) {
+                            for (const [doi, ut] of pairs) {
+                                const key = `${identityKey}|${doi}|${ut}`;
+                                if (seenKeys.has(key)) continue;
+
+                                const newRow = {
+                                    PersonID: '',
+                                    FirstName: '',
+                                    LastName: '',
+                                    OrganizationID: '',
+                                    DocumentID: doi || '',
+                                    "UT (Unique WOS ID)": ut || '',
+                                    AuthorID: orcidCandidates[0] || '',
+                                    EmailAddress: ufsEmail,
+                                    OtherNames: '',
+                                    FormerInstitution: ''
+                                };
+                                outputRows.push(newRow);
+                                addedUfsRows.push(newRow);
+                                seenKeys.add(key);
+                            }
+                        }
+                    }
+                }
             }
 
-            // Stats summary
-            statsDiv.innerHTML = `
-                <p>🔗 Publication rows with DOI/UT: <strong>${matchedRows(cleanedRows).length}</strong></p>
-                <p>⚠️ Authors still without DOI/UT: <strong>${noDOIorUT.length}</strong></p>
-                <p>👤 Total unique authors: <strong>${totalAuthors}</strong> 
-                   (with DOI/UT: ${withDOIorUT.length}, without DOI/UT: ${noDOIorUT.length})</p>
-                <p>❌ Exact duplicate rows removed: <strong>${exactDuplicates.length}</strong></p>
-                <p>📊 Final total rows in file: <strong>${cleanedRows.length}</strong></p>
-            `;
+            displayResults(outputRows, matchedRows, addedUfsRows);
+            resultSection.style.display = 'block';
+
+            downloadCsvBtn.onclick = () => downloadCSV(outputRows);
+            downloadExcelBtn.onclick = () => downloadExcel(outputRows);
 
         } catch (error) {
             showError(error.message);
@@ -80,7 +157,6 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     // ---------- Helpers ----------
-
     function readFileAsText(file) {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
@@ -105,9 +181,7 @@ document.addEventListener('DOMContentLoaded', function () {
             if (!lines[i].trim()) continue;
             const values = splitRow(lines[i], delimiter);
             const row = {};
-            headers.forEach((header, idx) => {
-                row[header] = (values[idx] || '').trim();
-            });
+            headers.forEach((header, idx) => row[header] = (values[idx] || '').trim());
             rows.push(row);
         }
         return rows;
@@ -132,100 +206,100 @@ document.addEventListener('DOMContentLoaded', function () {
         return result;
     }
 
-    // Deduplicate per author (AuthorID+Email) and DOI/UT
-    function groupAndClean(rows) {
-        const seen = new Set();
-        const cleaned = [];
-        const exactDuplicates = [];
-
-        rows.forEach(r => {
-            const authorKey = (r.AuthorID || '') + '|' + (r.EmailAddress || '');
-            const docId = (r.DocumentID || '').trim();
-            const ut = (r["UT (Unique WOS ID)"] || '').trim();
-            const key = `${authorKey}|${docId}|${ut}`;
-
-            if (!seen.has(key)) {
-                seen.add(key);
-                cleaned.push(r);
-            } else {
-                exactDuplicates.push(r);
-            }
-        });
-
-        return {
-            cleanedRows: cleaned.sort((a, b) => {
-                const idA = (a.EmailAddress || a.AuthorID || '').toLowerCase();
-                const idB = (b.EmailAddress || b.AuthorID || '').toLowerCase();
-                return idA.localeCompare(idB);
-            }),
-            exactDuplicates
-        };
+    function ensureContainsAll(actualHeaders, required, fileType) {
+        const missing = required.filter(h => !actualHeaders.includes(h));
+        if (missing.length > 0) throw new Error(`${fileType} file is missing required columns: ${missing.join(', ')}`);
     }
 
-    function analyzeAuthors(rows) {
-        const groups = {};
-        rows.forEach(r => {
-            const id = (r.AuthorID || '') + '|' + (r.EmailAddress || '');
-            if (!groups[id]) groups[id] = [];
-            groups[id].push(r);
-        });
-
-        const duplicatesSameUT = [];
-        const multipleDifferentUT = [];
-        const noDOIorUT = [];
-        const withDOIorUT = [];
-
-        Object.entries(groups).forEach(([id, group]) => {
-            const uts = new Set(group.map(r => (r["UT (Unique WOS ID)"] || '').trim()).filter(Boolean));
-            const dois = new Set(group.map(r => (r.DocumentID || '').trim()).filter(Boolean));
-
-            if (uts.size === 0 && dois.size === 0) {
-                noDOIorUT.push(group[0]);
-            } else {
-                withDOIorUT.push(group[0]);
-                if (uts.size === 1 && group.length > 1) {
-                    duplicatesSameUT.push(...group);
-                } else if (uts.size > 1) {
-                    multipleDifferentUT.push(...group);
-                }
-            }
-        });
-
-        return { 
-            duplicatesSameUT, 
-            multipleDifferentUT, 
-            noDOIorUT, 
-            withDOIorUT, 
-            totalAuthors: Object.keys(groups).length 
-        };
+    function ensureContainsAtLeastOne(actualHeaders, options, fileType) {
+        const present = options.some(h => actualHeaders.includes(h));
+        if (!present) throw new Error(`${fileType} file must contain at least one of: ${options.join(', ')}`);
     }
 
-    function matchedRows(rows) {
-        return rows.filter(r => (r.DocumentID && r.DocumentID !== '') || (r["UT (Unique WOS ID)"] && r["UT (Unique WOS ID)"] !== ''));
+    function extractEmails(val) {
+        if (!val) return [];
+        return val.split(';').map(e => e.trim().toLowerCase()).filter(e => e.includes('@'));
     }
 
-    function displayResults(allRows, duplicatesSameUT, multipleDifferentUT, noDOIorUT, enrichedRows, exactDuplicates) {
+    function extractOrcids(val) {
+        if (!val) return [];
+        const re = /\b\d{4}-\d{4}-\d{4}-\d{4}\b/g;
+        return Array.from(new Set((val.match(re) || []).map(x => x.toLowerCase())));
+    }
+
+    function extractDois(rowObj) {
+        const candidates = [];
+        const knownHeaders = ["DOI", "DoI", "DOIs", "DI"];
+        knownHeaders.forEach(h => { if (rowObj[h]) candidates.push(rowObj[h]); });
+        const allText = Object.values(rowObj).join(' ; ');
+        if (allText) candidates.push(allText);
+        const doiRe = /\b10\.\d{4,9}\/[^\s";,<>]+/gi;
+        const out = new Set();
+        for (const chunk of candidates) {
+            const m = chunk.match(doiRe);
+            if (m) m.forEach(v => out.add(cleanTail(v)));
+        }
+        return Array.from(out);
+    }
+
+    function extractUts(rowObj) {
+        const values = [];
+        const likelyHeaders = ["UT (Unique WOS ID)", "UT", "Accession Number", "WOS ID", "WoS ID"];
+        likelyHeaders.forEach(h => { if (rowObj[h]) values.push(rowObj[h]); });
+        const allText = Object.values(rowObj).join(' ; ');
+        if (allText) values.push(allText);
+        const out = new Set();
+        const wosRe = /WOS:\d+/gi;
+        for (const chunk of values) {
+            const m = chunk.match(wosRe);
+            if (m) m.forEach(v => out.add(v.toUpperCase()));
+        }
+        return Array.from(out);
+    }
+
+    function cleanTail(s) {
+        return (s || '').replace(/[\s'")\];,:.]+$/g, '');
+    }
+
+    function pairDoisUts(dois, uts) {
+        const uniqueDois = Array.from(new Set(dois));
+        const uniqueUts = Array.from(new Set(uts));
+        if (uniqueDois.length === 0 && uniqueUts.length === 0) return [];
+        if (uniqueDois.length === 0) return uniqueUts.map(ut => ['', ut]);
+        if (uniqueUts.length === 0) return uniqueDois.map(doi => [doi, '']);
+        const pairs = [];
+        uniqueDois.forEach((doi, i) => {
+            const ut = uniqueUts[Math.min(i, uniqueUts.length - 1)];
+            pairs.push([doi, ut]);
+        });
+        return pairs;
+    }
+
+    // ---------- UI ----------
+    function displayResults(allRows, matchedRows, addedUfsRows) {
+        if (allRows.length === 0) {
+            previewDiv.innerHTML = "<p>No results to display.</p>";
+            return;
+        }
         const headers = TEMPLATE_HEADERS;
         let html = `
-            <h3>🔁 Duplicate Authors with Same UT (${duplicatesSameUT.length})</h3>
-            ${buildTable(duplicatesSameUT, headers, "dup-ut-table")}
-            <h3>📚 Authors with Different UTs (${multipleDifferentUT.length})</h3>
-            ${buildTable(multipleDifferentUT, headers, "multi-ut-table")}
-            <h3>⚠️ Authors without DOI/UT (${noDOIorUT.length})</h3>
-            ${buildTable(noDOIorUT, headers, "no-ut-table")}
-            <h3>🔗 Matched & Enriched Rows (${enrichedRows.length})</h3>
-            ${buildTable(enrichedRows, headers, "matched-table")}
-            <h3>❌ Exact Duplicate Rows Removed (${exactDuplicates.length})</h3>
-            ${buildTable(exactDuplicates, headers, "dup-exact-table")}
+            <h3>🔗 Matched & Enriched Rows (${matchedRows.length})</h3>
+            ${buildTable(matchedRows, headers)}
+            <h3>🟢 New UFS-only Rows (${addedUfsRows.length})</h3>
+            ${buildTable(addedUfsRows, headers)}
             <h3>📊 Final Combined Template (${allRows.length})</h3>
-            ${buildTable(allRows, headers, "final-table")}
+            ${buildTable(allRows, headers)}
         `;
         previewDiv.innerHTML = html;
+        statsDiv.innerHTML = `
+            <p>🔗 Enriched <strong>${matchedRows.length}</strong> rows with DOI/UT links from data file.</p>
+            <p>🟢 Added <strong>${addedUfsRows.length}</strong> new UFS-only rows (@ufs.ac.za emails).</p>
+            <p>📊 Final total rows in template: <strong>${allRows.length}</strong>.</p>`;
     }
 
-    function buildTable(rows, headers, cssClass) {
+    function buildTable(rows, headers) {
         if (!rows || rows.length === 0) return "<p>No rows.</p>";
-        let table = `<table class="${cssClass}"><thead><tr>`;
+        let table = `<table><thead><tr>`;
         headers.forEach(h => table += `<th>${escapeHtml(h)}</th>`);
         table += `</tr></thead><tbody>`;
         rows.forEach(row => {
@@ -243,42 +317,32 @@ document.addEventListener('DOMContentLoaded', function () {
         return div.innerHTML;
     }
 
-    function downloadCSV(rows, filename) {
+    function downloadCSV(rows) {
         if (!rows || rows.length === 0) return;
-        const groupedRows = [...rows].sort((a, b) => {
-            const idA = (a.EmailAddress || a.AuthorID || '').toLowerCase();
-            const idB = (b.EmailAddress || b.AuthorID || '').toLowerCase();
-            return idA.localeCompare(idB);
-        });
         const headers = TEMPLATE_HEADERS;
         let csv = headers.join(',') + '\n';
-        groupedRows.forEach(row => {
+        rows.forEach(row => {
             csv += headers.map(h => `"${((row[h] || '') + '').replace(/"/g, '""')}"`).join(',') + '\n';
         });
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.setAttribute('download', filename);
+        link.setAttribute('download', 'populated_template.csv');
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
     }
 
-    function downloadExcel(rows, filename) {
+    function downloadExcel(rows) {
         if (!rows || rows.length === 0) return;
         if (typeof XLSX === 'undefined') {
             showError("⚠️ Excel export requires SheetJS. Downloading as CSV instead.");
-            downloadCSV(rows, filename.replace(".xlsx", ".csv"));
+            downloadCSV(rows);
             return;
         }
-        const groupedRows = [...rows].sort((a, b) => {
-            const idA = (a.EmailAddress || a.AuthorID || '').toLowerCase();
-            const idB = (b.EmailAddress || b.AuthorID || '').toLowerCase();
-            return idA.localeCompare(idB);
-        });
         const headers = TEMPLATE_HEADERS;
-        const normalizedRows = groupedRows.map(r => {
+        const normalizedRows = rows.map(r => {
             const obj = {};
             headers.forEach(h => obj[h] = r[h] || '');
             return obj;
@@ -286,7 +350,7 @@ document.addEventListener('DOMContentLoaded', function () {
         const ws = XLSX.utils.json_to_sheet(normalizedRows, { header: headers });
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "Results");
-        XLSX.writeFile(wb, filename);
+        XLSX.writeFile(wb, "populated_template.xlsx");
     }
 
     function showError(message) {
@@ -301,6 +365,5 @@ document.addEventListener('DOMContentLoaded', function () {
     function clearResults() {
         previewDiv.innerHTML = "";
         statsDiv.innerHTML = "";
-        downloadButtonsDiv.querySelectorAll("button:not(#downloadCsv):not(#downloadExcel)").forEach(btn => btn.remove());
     }
 });
