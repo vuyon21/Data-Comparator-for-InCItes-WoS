@@ -1,43 +1,39 @@
-HTML
-======
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>📚 Author Data Matcher</title>
-    <link rel="stylesheet" href="style.css">
-    <!-- Include SheetJS for Excel export -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <meta charset="UTF-8">
+  <title>👥 Employee / Researcher Data Merger</title>
+  <link rel="stylesheet" href="merge-style.css">
+  <!-- Include SheetJS for Excel export -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
+
 <body>
-    <div class="container">
-        <h1>📚 Author Data Matcher</h1>
-        <p>Upload your <strong>Template CSV</strong> (the file to populate) and <strong>Data CSV</strong> (source of DOIs/UTs).
-           The script will match authors by <em>EmailAddress</em> or <em>AuthorID</em>, pull DOIs/UTs, and clean duplicates.</p>
+  <div class="container">
+    <h1>👥 Employee / Researcher Data Merger</h1>
+    <p>
+      Upload your <strong>Template CSV</strong> (to be updated) and <strong>Data CSV</strong> (source file).<br>
+      The tool matches by <code>EmailAddress</code> or <code>PersonID</code>, fills missing fields from the data file, and prevents duplicates.
+    </p>
 
-        <div class="upload-section">
-            <label>📁 Upload Template (CSV):</label>
-            <input type="file" id="templateFile" accept=".csv">
+    <div class="upload-section">
+      <label>📁 Upload Template (CSV):</label><br>
+      <input type="file" id="templateFile" accept=".csv"><br><br>
 
-            <label>📁 Upload Data Files (CSV):</label>
-            <input type="file" id="dataFiles" accept=".csv" multiple>
+      <label>📁 Upload Data File (CSV):</label><br>
+      <input type="file" id="dataFile" accept=".csv"><br><br>
 
-            <button id="processBtn" disabled>▶️ Process Files</button>
-        </div>
-
-        <div id="resultSection" style="display:none;">
-            <h2>✅ Results</h2>
-            <div id="stats"></div>
-
-            <div class="download-buttons">
-                <button id="downloadCsv">📥 Download as CSV</button>
-                <button id="downloadExcel">📥 Download as Excel</button>
-            </div>
-
-            <div id="preview"></div>
-        </div>
+      <button id="processBtn">▶️ Compare & Merge</button>
+      <button id="downloadBtn">📥 Download Merged CSV</button>
     </div>
 
-    <script src="script.js"></script>
+    <div id="resultSection" style="display:none;">
+      <h2>✅ Results</h2>
+      <div id="stats"></div>
+      <div id="preview"></div>
+    </div>
+  </div>
+
+  <script src="merge-script.js"></script>
 </body>
 </html>
